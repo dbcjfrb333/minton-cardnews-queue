@@ -1,0 +1,38 @@
+name: Post Instagram cardnews
+
+on:
+  schedule:
+    # 17:50 KST = 08:50 UTC (GitHub 서버 사정으로 몇 분 늦을 수 있어요)
+    - cron: "50 8 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "게시할 폴더 날짜 (YYYY-MM-DD). 비우면 오늘(KST)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: instagram-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pillow requests
+
+      - name: Post to Instagram
+        env:
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          TARGET_DATE: ${{ github.event.inputs.date }}
+          REPO: ${{ github.repository }}
+        run: python scripts/post_instagram.py
