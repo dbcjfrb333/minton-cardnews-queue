@@ -2,8 +2,16 @@ name: Post Instagram cardnews
 
 on:
   schedule:
-    # 17:50 KST = 08:50 UTC (GitHub 서버 사정으로 몇 분 늦을 수 있어요)
+    # GitHub 알람은 가끔 늦거나 빠져요. 그래서 4번 확인해요.
+    # 이미 올린 날은 .posted 표시가 있어서 다시 올리지 않아요.
+    # 17:50 KST
     - cron: "50 8 * * *"
+    # 18:10 KST
+    - cron: "10 9 * * *"
+    # 18:40 KST
+    - cron: "40 9 * * *"
+    # 19:20 KST
+    - cron: "20 10 * * *"
   workflow_dispatch:
     inputs:
       date:
