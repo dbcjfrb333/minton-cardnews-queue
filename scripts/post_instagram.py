@@ -64,6 +64,60 @@ def push_safely():
     sys.exit("git push 실패")
 
 
+def already_on_instagram(caption):
+    """인스타에 같은 캡션 글이 최근 3일 안에 있으면 그 글 id를 돌려준다. (읽기 실패 시 None)"""
+    try:
+        r = requests.get(
+            f"{GRAPH}/{USER_ID}/media",
+            params={"fields": "id,caption,timestamp", "limit": 15, "access_token": TOKEN},
+            timeout=60,
+        )
+        if not r.ok:
+            print(f"인스타 최근 글 확인 못함(건너뜀): {r.status_code}")
+            return None
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for m in r.json().get("data", []):
+            ts = datetime.datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")
+            if (m.get("caption") or "").strip() == caption and (now - ts).days < 3:
+                return m["id"]
+    except Exception as e:  # 확인이 안 돼도 자물쇠가 막아 주므로 계속 진행
+        print(f"인스타 최근 글 확인 중 오류(건너뜀): {e}")
+    return None
+
+
+def mark_posted(media_id):
+    (folder / ".posted").write_text(media_id + "\n")
+    run("git", "add", str(folder / ".posted"))
+    run("git", "commit", "-m", f"posted {date}")
+    push_safely()
+
+
+def acquire_lock():
+    """'지금 올리는 중' 표시를 먼저 올린다. 푸시는 한 명만 성공하므로 한 번에 한 로봇만 통과한다."""
+    lock = folder / ".posting"
+    lock.write_text(datetime.datetime.now(datetime.timezone.utc).isoformat() + "\n")
+    run("git", "config", "user.name", "cardnews-bot")
+    run("git", "config", "user.email", "cardnews-bot@users.noreply.github.com")
+    run("git", "add", str(lock))
+    run("git", "commit", "-m", f"lock {date}")
+    if subprocess.run(["git", "push", "origin", "HEAD:main"]).returncode != 0:
+        run("git", "fetch", "origin", "main")
+        run("git", "reset", "--hard", "origin/main")
+        print("다른 로봇이 먼저 자물쇠를 잡았어요 → 나는 멈춰요.")
+        return False
+    return True
+
+
+def release_lock():
+    """올리기 전에 실패했을 때만 자물쇠를 풀어 다음 확인 때 다시 시도할 수 있게 한다."""
+    try:
+        run("git", "rm", "-q", str(folder / ".posting"))
+        run("git", "commit", "-m", f"unlock {date}")
+        push_safely()
+    except BaseException as e:
+        print(f"자물쇠 풀기 실패(수동 확인 필요): {e}")
+
+
 def main():
     # 대기하다 늦게 시작한 실행이 옛날 상태를 보지 않도록 최신 main으로 맞춘다.
     run("git", "fetch", "origin", "main")
@@ -74,6 +128,15 @@ def main():
     if (folder / ".posted").exists():
         print(f"{folder} 는 이미 게시됨 → 건너뜀.")
         return
+    lock = folder / ".posting"
+    if lock.exists():
+        t = datetime.datetime.fromisoformat(lock.read_text().strip())
+        age = (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds()
+        if age < 1800:
+            print("다른 로봇이 지금 올리는 중 → 건너뜀.")
+            return
+        sys.exit("이전 실행이 올리는 도중 멈췄어요. 인스타를 확인하고, 안 올라갔으면 "
+                 f"{lock} 파일을 지워 주세요. (중복 방지를 위해 자동으로 다시 올리지 않아요)")
 
     images = sorted(
         p for p in folder.iterdir()
@@ -87,49 +150,58 @@ def main():
     if len(caption) > 2200:
         sys.exit(f"캡션이 너무 길어요 ({len(caption)}자, 최대 2200자)")
 
-    # 인스타 API는 JPEG만 받으므로 변환해서 _jpg 폴더에 저장 후 푸시
-    jpg_dir = folder / "_jpg"
-    jpg_dir.mkdir(exist_ok=True)
-    jpgs = []
-    for i, img in enumerate(images, 1):
-        out = jpg_dir / f"{i:02d}.jpg"
-        Image.open(img).convert("RGB").save(out, "JPEG", quality=95)
-        jpgs.append(out)
+    found = already_on_instagram(caption)
+    if found:
+        print(f"인스타에 같은 글이 이미 있어요({found}) → 올리지 않고 기록만 해요.")
+        mark_posted(found)
+        return
 
-    run("git", "config", "user.name", "cardnews-bot")
-    run("git", "config", "user.email", "cardnews-bot@users.noreply.github.com")
-    run("git", "add", str(jpg_dir))
-    run("git", "commit", "-m", f"convert {date} images to jpeg")
-    push_safely()
-    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if not acquire_lock():
+        return
 
-    urls = [f"https://raw.githubusercontent.com/{REPO}/{sha}/{p.as_posix()}" for p in jpgs]
-    for u in urls:  # raw URL이 반영될 때까지 대기
-        for _ in range(12):
-            if requests.head(u, timeout=30).status_code == 200:
-                break
-            time.sleep(5)
-        else:
-            sys.exit(f"이미지 URL 접근 불가: {u} (저장소가 Public인지 확인)")
+    try:
+        # 인스타 API는 JPEG만 받으므로 변환해서 _jpg 폴더에 저장 후 푸시
+        jpg_dir = folder / "_jpg"
+        jpg_dir.mkdir(exist_ok=True)
+        jpgs = []
+        for i, img in enumerate(images, 1):
+            out = jpg_dir / f"{i:02d}.jpg"
+            Image.open(img).convert("RGB").save(out, "JPEG", quality=95)
+            jpgs.append(out)
 
-    children = []
-    for u in urls:
-        c = api("POST", f"{USER_ID}/media", image_url=u, is_carousel_item="true")["id"]
-        wait_finished(c)
-        children.append(c)
+        run("git", "add", str(jpg_dir))
+        run("git", "commit", "-m", f"convert {date} images to jpeg")
+        push_safely()
+        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
-    carousel = api(
-        "POST", f"{USER_ID}/media",
-        media_type="CAROUSEL", children=",".join(children), caption=caption,
-    )["id"]
-    wait_finished(carousel)
+        urls = [f"https://raw.githubusercontent.com/{REPO}/{sha}/{p.as_posix()}" for p in jpgs]
+        for u in urls:  # raw URL이 반영될 때까지 대기
+            for _ in range(12):
+                if requests.head(u, timeout=30).status_code == 200:
+                    break
+                time.sleep(5)
+            else:
+                sys.exit(f"이미지 URL 접근 불가: {u} (저장소가 Public인지 확인)")
+
+        children = []
+        for u in urls:
+            c = api("POST", f"{USER_ID}/media", image_url=u, is_carousel_item="true")["id"]
+            wait_finished(c)
+            children.append(c)
+
+        carousel = api(
+            "POST", f"{USER_ID}/media",
+            media_type="CAROUSEL", children=",".join(children), caption=caption,
+        )["id"]
+        wait_finished(carousel)
+    except BaseException:
+        release_lock()  # 아직 인스타에 올리기 전이라 다시 시도해도 안전해요
+        raise
+
+    # 여기부터는 결과가 불확실할 수 있으므로 실패해도 자물쇠를 풀지 않는다 (중복 방지).
     media_id = api("POST", f"{USER_ID}/media_publish", creation_id=carousel)["id"]
     print(f"게시 완료: {media_id}")
-
-    (folder / ".posted").write_text(media_id + "\n")
-    run("git", "add", str(folder / ".posted"))
-    run("git", "commit", "-m", f"posted {date}")
-    push_safely()
+    mark_posted(media_id)
 
 
 if __name__ == "__main__":
