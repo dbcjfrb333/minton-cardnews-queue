@@ -54,7 +54,20 @@ def wait_finished(container_id):
     sys.exit("컨테이너 처리 시간 초과")
 
 
+def push_safely():
+    """main이 먼저 바뀌었어도 합쳐서 올린다 (3번까지 재시도)."""
+    for i in range(3):
+        if subprocess.run(["git", "push", "origin", "HEAD:main"]).returncode == 0:
+            return
+        run("git", "pull", "--rebase", "origin", "main")
+        time.sleep(2 * (i + 1))
+    sys.exit("git push 실패")
+
+
 def main():
+    # 대기하다 늦게 시작한 실행이 옛날 상태를 보지 않도록 최신 main으로 맞춘다.
+    run("git", "fetch", "origin", "main")
+    run("git", "reset", "--hard", "origin/main")
     if not folder.is_dir():
         print(f"{folder} 없음 → 오늘은 올릴 게시물이 없어요.")
         return
@@ -87,7 +100,7 @@ def main():
     run("git", "config", "user.email", "cardnews-bot@users.noreply.github.com")
     run("git", "add", str(jpg_dir))
     run("git", "commit", "-m", f"convert {date} images to jpeg")
-    run("git", "push")
+    push_safely()
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
     urls = [f"https://raw.githubusercontent.com/{REPO}/{sha}/{p.as_posix()}" for p in jpgs]
@@ -116,7 +129,7 @@ def main():
     (folder / ".posted").write_text(media_id + "\n")
     run("git", "add", str(folder / ".posted"))
     run("git", "commit", "-m", f"posted {date}")
-    run("git", "push")
+    push_safely()
 
 
 if __name__ == "__main__":

@@ -30,6 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 늦게 시작한 실행도 항상 '가장 새로운 main'을 보게 해요.
+          # (이게 없으면 대기하던 실행이 옛날 상태를 보고 같은 글을 또 올려요)
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
