@@ -24,6 +24,9 @@ date = os.environ.get("TARGET_DATE") or datetime.datetime.now(
     ZoneInfo("Asia/Seoul")
 ).strftime("%Y-%m-%d")
 folder = Path("queue") / date
+DRY = os.environ.get("DRY_RUN") == "true"  # 연습 모드: 인스타에 '올리기'만 안 한다
+if DRY and not date.startswith("test"):
+    sys.exit("연습 모드는 test 로 시작하는 시험 폴더에서만 쓸 수 있어요. (진짜 폴더 보호)")
 
 
 def run(*cmd):
@@ -197,6 +200,10 @@ def main():
     except BaseException:
         release_lock()  # 아직 인스타에 올리기 전이라 다시 시도해도 안전해요
         raise
+
+    if DRY:
+        print("연습 모드: 여기까지 성공! 인스타에 올리기는 하지 않았어요. (자물쇠는 시험을 위해 남겨 둠)")
+        return
 
     # 여기부터는 결과가 불확실할 수 있으므로 실패해도 자물쇠를 풀지 않는다 (중복 방지).
     media_id = api("POST", f"{USER_ID}/media_publish", creation_id=carousel)["id"]

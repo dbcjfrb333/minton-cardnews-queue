@@ -17,6 +17,10 @@ on:
       date:
         description: "게시할 폴더 날짜 (YYYY-MM-DD). 비우면 오늘(KST)"
         required: false
+      dry_run:
+        description: "연습 모드 (true면 인스타에 올리지 않음, test로 시작하는 폴더만)"
+        required: false
+        default: "false"
 
 permissions:
   contents: write
@@ -45,6 +49,7 @@ jobs:
         env:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
           TARGET_DATE: ${{ github.event.inputs.date }}
           REPO: ${{ github.repository }}
         run: python scripts/post_instagram.py
