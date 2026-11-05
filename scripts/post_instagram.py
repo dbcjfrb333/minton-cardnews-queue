@@ -99,8 +99,6 @@ def acquire_lock():
     """'지금 올리는 중' 표시를 먼저 올린다. 푸시는 한 명만 성공하므로 한 번에 한 로봇만 통과한다."""
     lock = folder / ".posting"
     lock.write_text(datetime.datetime.now(datetime.timezone.utc).isoformat() + "\n")
-    run("git", "config", "user.name", "cardnews-bot")
-    run("git", "config", "user.email", "cardnews-bot@users.noreply.github.com")
     run("git", "add", str(lock))
     run("git", "commit", "-m", f"lock {date}")
     if subprocess.run(["git", "push", "origin", "HEAD:main"]).returncode != 0:
@@ -121,7 +119,14 @@ def release_lock():
         print(f"자물쇠 풀기 실패(수동 확인 필요): {e}")
 
 
+def set_git_name():
+    """git 이름표를 맨 처음에 한 번 달아 둔다. (없으면 '올림' 표시를 저장할 때 멈춘다)"""
+    run("git", "config", "user.name", "cardnews-bot")
+    run("git", "config", "user.email", "cardnews-bot@users.noreply.github.com")
+
+
 def main():
+    set_git_name()
     # 대기하다 늦게 시작한 실행이 옛날 상태를 보지 않도록 최신 main으로 맞춘다.
     run("git", "fetch", "origin", "main")
     run("git", "reset", "--hard", "origin/main")
