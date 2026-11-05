@@ -68,24 +68,32 @@ def push_safely():
 
 
 def already_on_instagram(caption):
-    """인스타에 같은 캡션 글이 최근 3일 안에 있으면 그 글 id를 돌려준다. (읽기 실패 시 None)"""
-    try:
-        r = requests.get(
-            f"{GRAPH}/{USER_ID}/media",
-            params={"fields": "id,caption,timestamp", "limit": 15, "access_token": TOKEN},
-            timeout=60,
-        )
-        if not r.ok:
-            print(f"인스타 최근 글 확인 못함(건너뜀): {r.status_code}")
-            return None
-        now = datetime.datetime.now(datetime.timezone.utc)
-        for m in r.json().get("data", []):
-            ts = datetime.datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")
-            if (m.get("caption") or "").strip() == caption and (now - ts).days < 3:
-                return m["id"]
-    except Exception as e:  # 확인이 안 돼도 자물쇠가 막아 주므로 계속 진행
-        print(f"인스타 최근 글 확인 중 오류(건너뜀): {e}")
-    return None
+    """인스타에 같은 글이 최근 3일 안에 있으면 그 글 id를 돌려준다.
+    확인이 안 되면(3번 시도) 중복 위험이 있으니 올리지 않고 멈춘다."""
+    first = caption.strip().splitlines()[0].strip() if caption.strip() else ""
+    last_err = ""
+    for i in range(3):
+        try:
+            r = requests.get(
+                f"{GRAPH}/{USER_ID}/media",
+                params={"fields": "id,caption,timestamp", "limit": 25, "access_token": TOKEN},
+                timeout=60,
+            )
+            if r.ok:
+                now = datetime.datetime.now(datetime.timezone.utc)
+                for m in r.json().get("data", []):
+                    ts = datetime.datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")
+                    cap = (m.get("caption") or "").strip()
+                    same = cap == caption or (first and cap.splitlines()[:1] == [first])
+                    if same and (now - ts).days < 3:
+                        return m["id"]
+                return None
+            last_err = f"{r.status_code} {r.text[:200]}"
+        except Exception as e:
+            last_err = str(e)
+        time.sleep(3 * (i + 1))
+    sys.exit("인스타 최근 글을 확인하지 못해서 중복 방지를 위해 올리지 않고 멈춰요. "
+             f"(다음 확인 때 다시 시도해요) 이유: {last_err}")
 
 
 def mark_posted(media_id):
