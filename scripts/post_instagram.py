@@ -96,6 +96,39 @@ def already_on_instagram(caption):
              f"(다음 확인 때 다시 시도해요) 이유: {last_err}")
 
 
+def warn_if_duplicate(caption, media_id):
+    """올린 뒤 같은 글이 인스타에 2개 이상 보이면 빨간 경고를 남긴다. (자동 삭제는 못 해요)
+    확인 자체가 안 돼도 이미 올린 뒤라 멈추지 않는다."""
+    first = caption.strip().splitlines()[0].strip() if caption.strip() else ""
+    if not first:
+        return False
+    time.sleep(60)  # 인스타가 목록에 반영할 시간
+    try:
+        r = requests.get(
+            f"{GRAPH}/{USER_ID}/media",
+            params={"fields": "id,caption,timestamp,permalink", "limit": 25, "access_token": TOKEN},
+            timeout=60,
+        )
+        if not r.ok:
+            print(f"중복 확인 실패(무시): {r.status_code} {r.text[:200]}")
+            return False
+        now = datetime.datetime.now(datetime.timezone.utc)
+        same = []
+        for m in r.json().get("data", []):
+            ts = datetime.datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")
+            cap = (m.get("caption") or "").strip()
+            if cap.splitlines()[:1] == [first] and (now - ts).total_seconds() < 86400:
+                same.append(m)
+        if len(same) > 1:
+            lines = ", ".join(f"{m['id']} ({m['timestamp']}) {m.get('permalink','')}" for m in same)
+            print(f"::error::같은 글이 인스타에 {len(same)}개 있어요! 방금 올린 글: {media_id}. 목록: {lines}")
+            return True
+        print("중복 확인 완료: 같은 글은 1개뿐이에요.")
+    except Exception as e:
+        print(f"중복 확인 실패(무시): {e}")
+    return False
+
+
 def mark_posted(media_id):
     (folder / ".posted").write_text(media_id + "\n")
     run("git", "add", str(folder / ".posted"))
@@ -222,6 +255,8 @@ def main():
     media_id = api("POST", f"{USER_ID}/media_publish", creation_id=carousel)["id"]
     print(f"게시 완료: {media_id}")
     mark_posted(media_id)
+    if warn_if_duplicate(caption, media_id):
+        sys.exit(1)  # 기록은 이미 저장했어요. 실행을 빨갛게 만들어 알려 줘요.
 
 
 if __name__ == "__main__":
