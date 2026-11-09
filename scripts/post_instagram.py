@@ -106,7 +106,7 @@ def warn_if_duplicate(caption, media_id):
     try:
         r = requests.get(
             f"{GRAPH}/{USER_ID}/media",
-            params={"fields": "id,caption,timestamp,permalink", "limit": 25, "access_token": TOKEN},
+            params={"fields": "id,caption,timestamp,permalink,media_type,media_product_type,is_comment_enabled", "limit": 25, "access_token": TOKEN},
             timeout=60,
         )
         if not r.ok:
@@ -120,7 +120,7 @@ def warn_if_duplicate(caption, media_id):
             if cap.splitlines()[:1] == [first] and (now - ts).total_seconds() < 86400:
                 same.append(m)
         if len(same) > 1:
-            lines = ", ".join(f"{m['id']} ({m['timestamp']}) {m.get('permalink','')}" for m in same)
+            lines = ", ".join(f"{m['id']} ({m['timestamp']}) {m.get('permalink','')} [{m.get('media_type')}/{m.get('media_product_type')}]" for m in same)
             print(f"::error::같은 글이 인스타에 {len(same)}개 있어요! 방금 올린 글: {media_id}. 목록: {lines}")
             return True
         print("중복 확인 완료: 같은 글은 1개뿐이에요.")
@@ -252,8 +252,11 @@ def main():
         return
 
     # 여기부터는 결과가 불확실할 수 있으므로 실패해도 자물쇠를 풀지 않는다 (중복 방지).
+    t0 = datetime.datetime.now(datetime.timezone.utc)
+    print(f"올리기 명령 보냄(1번뿐): {t0.isoformat()} 컨테이너 {carousel}")
     media_id = api("POST", f"{USER_ID}/media_publish", creation_id=carousel)["id"]
-    print(f"게시 완료: {media_id}")
+    t1 = datetime.datetime.now(datetime.timezone.utc)
+    print(f"게시 완료: {media_id} (응답까지 {(t1 - t0).total_seconds():.1f}초, {t1.isoformat()})")
     mark_posted(media_id)
     if warn_if_duplicate(caption, media_id):
         sys.exit(1)  # 기록은 이미 저장했어요. 실행을 빨갛게 만들어 알려 줘요.
