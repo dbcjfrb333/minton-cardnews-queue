@@ -97,35 +97,42 @@ def already_on_instagram(caption):
 
 
 def warn_if_duplicate(caption, media_id):
-    """올린 뒤 같은 글이 인스타에 2개 이상 보이면 빨간 경고를 남긴다. (자동 삭제는 못 해요)
+    """올린 뒤 1분·5분·15분 뒤에 같은 글이 인스타에 2개 이상 보이면 빨간 경고를 남긴다.
+    (두 번째 글이 몇 분 뒤에 생기는 일이 있어서 여러 번 본다. 자동 삭제는 못 해요)
     확인 자체가 안 돼도 이미 올린 뒤라 멈추지 않는다."""
     first = caption.strip().splitlines()[0].strip() if caption.strip() else ""
     if not first:
         return False
-    time.sleep(60)  # 인스타가 목록에 반영할 시간
-    try:
-        r = requests.get(
-            f"{GRAPH}/{USER_ID}/media",
-            params={"fields": "id,caption,timestamp,permalink,media_type,media_product_type,is_comment_enabled", "limit": 25, "access_token": TOKEN},
-            timeout=60,
-        )
-        if not r.ok:
-            print(f"중복 확인 실패(무시): {r.status_code} {r.text[:200]}")
-            return False
-        now = datetime.datetime.now(datetime.timezone.utc)
-        same = []
-        for m in r.json().get("data", []):
-            ts = datetime.datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")
-            cap = (m.get("caption") or "").strip()
-            if cap.splitlines()[:1] == [first] and (now - ts).total_seconds() < 86400:
-                same.append(m)
-        if len(same) > 1:
-            lines = ", ".join(f"{m['id']} ({m['timestamp']}) {m.get('permalink','')} [{m.get('media_type')}/{m.get('media_product_type')}]" for m in same)
-            print(f"::error::같은 글이 인스타에 {len(same)}개 있어요! 방금 올린 글: {media_id}. 목록: {lines}")
-            return True
-        print("중복 확인 완료: 같은 글은 1개뿐이에요.")
-    except Exception as e:
-        print(f"중복 확인 실패(무시): {e}")
+    t_post = datetime.datetime.now(datetime.timezone.utc)
+    waited = 0
+    for minutes in (1, 5, 15):
+        time.sleep(minutes * 60 - waited)  # 인스타가 목록에 반영할 시간
+        waited = minutes * 60
+        try:
+            r = requests.get(
+                f"{GRAPH}/{USER_ID}/media",
+                params={"fields": "id,caption,timestamp,permalink,media_type,media_product_type,is_comment_enabled", "limit": 25, "access_token": TOKEN},
+                timeout=60,
+            )
+            if not r.ok:
+                print(f"중복 확인({minutes}분 뒤) 실패(무시): {r.status_code} {r.text[:200]}")
+                continue
+            now = datetime.datetime.now(datetime.timezone.utc)
+            same = []
+            for m in r.json().get("data", []):
+                ts = datetime.datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")
+                cap = (m.get("caption") or "").strip()
+                if cap.splitlines()[:1] == [first] and (now - ts).total_seconds() < 86400:
+                    same.append(m)
+            if len(same) > 1:
+                lines = "; ".join(
+                    f"{m['id']} ({m['timestamp']}, 로봇이 올린 시각보다 {(datetime.datetime.strptime(m['timestamp'], '%Y-%m-%dT%H:%M:%S%z') - t_post).total_seconds():+.0f}초) "
+                    f"{m.get('permalink','')} [{m.get('media_type')}/{m.get('media_product_type')}]" for m in same)
+                print(f"::error::같은 글이 인스타에 {len(same)}개 있어요! ({minutes}분 뒤 확인) 방금 올린 글: {media_id}. 목록: {lines}")
+                return True
+            print(f"중복 확인 완료({minutes}분 뒤): 같은 글은 1개뿐이에요.")
+        except Exception as e:
+            print(f"중복 확인({minutes}분 뒤) 실패(무시): {e}")
     return False
 
 
