@@ -96,22 +96,37 @@ def already_on_instagram(caption):
              f"(다음 확인 때 다시 시도해요) 이유: {last_err}")
 
 
-def warn_if_duplicate(caption, media_id):
-    """올린 뒤 1분·5분·15분 뒤에 같은 글이 인스타에 2개 이상 보이면 빨간 경고를 남긴다.
-    (두 번째 글이 몇 분 뒤에 생기는 일이 있어서 여러 번 본다. 자동 삭제는 못 해요)
-    확인 자체가 안 돼도 이미 올린 뒤라 멈추지 않는다."""
+def delete_media(mid):
+    """인스타 글 1개를 지운다. 성공하면 True. (권한이 없거나 실패하면 False, 멈추지 않음)"""
+    try:
+        r = requests.delete(f"{GRAPH}/{mid}", params={"access_token": TOKEN}, timeout=60)
+        if r.ok:
+            return True
+        print(f"자동 삭제 실패: {mid} {r.status_code} {r.text[:300]}")
+    except Exception as e:
+        print(f"자동 삭제 실패: {mid} {e}")
+    return False
+
+
+def watch_duplicates(caption, media_id):
+    """올린 뒤 1·3·5·10·15·30분에 인스타를 본다.
+    로봇이 올린 글(media_id) 말고 같은 첫 줄 글이 '나중에' 또 생기면(11/6~11/11에 메타 쪽에서 생긴 복제)
+    먼저 번호·시각·주소를 기록하고, 그 나중 글만 지운다. 로봇이 올린 글은 절대 지우지 않는다.
+    지우지 못하면 True를 돌려줘서 실행을 빨갛게 만든다(코치님이 직접 지우도록)."""
     first = caption.strip().splitlines()[0].strip() if caption.strip() else ""
     if not first:
         return False
     t_post = datetime.datetime.now(datetime.timezone.utc)
     waited = 0
-    for minutes in (1, 5, 15):
+    problem = False
+    deleted = set()
+    for minutes in (1, 3, 5, 10, 15, 30):
         time.sleep(minutes * 60 - waited)  # 인스타가 목록에 반영할 시간
         waited = minutes * 60
         try:
             r = requests.get(
                 f"{GRAPH}/{USER_ID}/media",
-                params={"fields": "id,caption,timestamp,permalink,media_type,media_product_type,is_comment_enabled", "limit": 25, "access_token": TOKEN},
+                params={"fields": "id,caption,timestamp,permalink,media_type,media_product_type", "limit": 25, "access_token": TOKEN},
                 timeout=60,
             )
             if not r.ok:
@@ -123,17 +138,36 @@ def warn_if_duplicate(caption, media_id):
                 ts = datetime.datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")
                 cap = (m.get("caption") or "").strip()
                 if cap.splitlines()[:1] == [first] and (now - ts).total_seconds() < 86400:
+                    m["_ts"] = ts
                     same.append(m)
-            if len(same) > 1:
-                lines = "; ".join(
-                    f"{m['id']} ({m['timestamp']}, 로봇이 올린 시각보다 {(datetime.datetime.strptime(m['timestamp'], '%Y-%m-%dT%H:%M:%S%z') - t_post).total_seconds():+.0f}초) "
-                    f"{m.get('permalink','')} [{m.get('media_type')}/{m.get('media_product_type')}]" for m in same)
-                print(f"::error::같은 글이 인스타에 {len(same)}개 있어요! ({minutes}분 뒤 확인) 방금 올린 글: {media_id}. 목록: {lines}")
-                return True
-            print(f"중복 확인 완료({minutes}분 뒤): 같은 글은 1개뿐이에요.")
+            ids = [m["id"] for m in same]
+            if media_id not in ids:
+                print(f"::warning::로봇이 올린 글({media_id})이 목록에 아직 안 보여요({minutes}분 뒤). 이번엔 아무것도 지우지 않아요.")
+                continue
+            extra = [m for m in same if m["id"] != media_id and m["id"] not in deleted]
+            if not extra:
+                print(f"중복 확인 완료({minutes}분 뒤): 같은 글은 1개뿐이에요.")
+                continue
+            for m in extra:
+                gap = (m["_ts"] - t_post).total_seconds()
+                info = (f"{m['id']} ({m['timestamp']}, 로봇이 올린 시각보다 {gap:+.0f}초) "
+                        f"{m.get('permalink','')} [{m.get('media_type')}/{m.get('media_product_type')}]")
+                print(f"::warning::같은 글이 하나 더 생겼어요({minutes}분 뒤 확인). 로봇 글: {media_id}. 더 생긴 글: {info}")
+                # 로봇이 올리기 전부터 있던 글이면 사람이 올린 것일 수 있으니 건드리지 않는다.
+                if gap < -30:
+                    print(f"::error::이 글은 로봇보다 먼저 올라온 글이라 자동으로 지우지 않아요: {m['id']}")
+                    problem = True
+                    deleted.add(m["id"])
+                    continue
+                if delete_media(m["id"]):
+                    print(f"더 생긴 글을 자동으로 지웠어요: {m['id']} (로봇 글 {media_id}는 그대로)")
+                else:
+                    print(f"::error::더 생긴 글을 지우지 못했어요. 인스타에서 직접 지워 주세요: {m.get('permalink','')} (나중에 올라온 글)")
+                    problem = True
+                deleted.add(m["id"])
         except Exception as e:
             print(f"중복 확인({minutes}분 뒤) 실패(무시): {e}")
-    return False
+    return problem
 
 
 def mark_posted(media_id):
@@ -265,8 +299,8 @@ def main():
     t1 = datetime.datetime.now(datetime.timezone.utc)
     print(f"게시 완료: {media_id} (응답까지 {(t1 - t0).total_seconds():.1f}초, {t1.isoformat()})")
     mark_posted(media_id)
-    if warn_if_duplicate(caption, media_id):
-        sys.exit(1)  # 기록은 이미 저장했어요. 실행을 빨갛게 만들어 알려 줘요.
+    if watch_duplicates(caption, media_id):
+        sys.exit(1)  # 기록은 이미 저장했어요. 직접 지워야 할 글이 있으면 실행을 빨갛게 만들어 알려 줘요.
 
 
 if __name__ == "__main__":
