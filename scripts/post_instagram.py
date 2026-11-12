@@ -284,6 +284,11 @@ def main():
             media_type="CAROUSEL", children=",".join(children), caption=caption,
         )["id"]
         wait_finished(carousel)
+        # 11/12 시험: 준비가 끝나자마자 올리지 않고 60초 더 기다린 뒤, 다시 '준비 끝'을 확인하고 올린다.
+        # (메타 쪽에서 같은 글이 하나 더 생기는 문제를 줄여 보려는 시험. 효과는 아직 모름)
+        print("올리기 전 60초 더 기다려요 (중복 줄이기 시험)")
+        time.sleep(60)
+        wait_finished(carousel)
     except BaseException:
         release_lock()  # 아직 인스타에 올리기 전이라 다시 시도해도 안전해요
         raise
